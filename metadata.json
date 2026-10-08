@@ -1,0 +1,7 @@
+{
+  "name": "សៀវភៅកត់ត្រា AI - Phsar Ledger",
+  "description": "កម្មវិធីកត់ត្រាចំណូលចំណាយ និងស្កេនវិក្កយបត្រស្វ័យប្រវត្តិជាមួយ AI សម្រាប់អាជីវកម្មនៅកម្ពុជា",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

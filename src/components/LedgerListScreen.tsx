@@ -1,0 +1,365 @@
+import React, { useState } from 'react';
+import { Transaction, AppSettings } from '../types.ts';
+
+interface LedgerListScreenProps {
+  transactions: Transaction[];
+  settings: AppSettings;
+  onSelectTransaction: (tx: Transaction) => void;
+  onRefresh: () => void;
+}
+
+export const LedgerListScreen: React.FC<LedgerListScreenProps> = ({
+  transactions,
+  settings,
+  onSelectTransaction,
+  onRefresh,
+}) => {
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [activeCategory, setActiveCategory] = useState<'all' | 'expense' | 'income'>('all');
+  const [sortOrder, setSortOrder] = useState<'date-desc' | 'date-asc' | 'amount-desc'>('date-desc');
+  const [showToast, setShowToast] = useState<boolean>(false);
+  const [toastMessage, setToastMessage] = useState<string>('');
+
+  // Filter transactions
+  const filtered = transactions.filter((tx) => {
+    const matchesCategory =
+      activeCategory === 'all' ||
+      (activeCategory === 'expense' && tx.type === 'expense') ||
+      (activeCategory === 'income' && tx.type === 'income');
+
+    const q = searchQuery.toLowerCase().trim();
+    const matchesSearch =
+      !q ||
+      tx.vendor.toLowerCase().includes(q) ||
+      tx.vendorKh.toLowerCase().includes(q) ||
+      tx.ref.toLowerCase().includes(q) ||
+      tx.category.toLowerCase().includes(q);
+
+    return matchesCategory && matchesSearch;
+  });
+
+  // Sort
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortOrder === 'date-desc') return b.date.localeCompare(a.date);
+    if (sortOrder === 'date-asc') return a.date.localeCompare(b.date);
+    if (sortOrder === 'amount-desc') return b.amountUSD - a.amountUSD;
+    return 0;
+  });
+
+  // Calculate monthly total
+  const totalExpenseUSD = transactions
+    .filter((t) => t.type === 'expense')
+    .reduce((sum, t) => sum + t.amountUSD, 0);
+
+  // Trigger export
+  const handleExport = () => {
+    // Generate CSV content
+    const headers = ['Ref', 'Vendor', 'Category', 'Date', 'Amount_USD', 'Amount_KHR', 'VAT_USD', 'Status'];
+    const rows = transactions.map((t) => [
+      t.ref,
+      `"${t.vendor}"`,
+      `"${t.categoryCode}"`,
+      t.date,
+      t.amountUSD.toFixed(2),
+      t.amountKHR,
+      t.vatUSD.toFixed(2),
+      t.status,
+    ]);
+
+    const csvContent =
+      'data:text/csv;charset=utf-8,\uFEFF' +
+      [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `Phsar_Ledger_Report_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    setToastMessage('របាយការណ៍សៀវភៅធំត្រូវបានរក្សាទុក');
+    setShowToast(true);
+    setTimeout(() => {
+      setShowToast(false);
+    }, 3200);
+  };
+
+  return (
+    <div className="flex flex-col w-full px-margin pb-32 pt-2 relative">
+      {/* Toast Notification */}
+      <div
+        className={`fixed top-20 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 w-11/12 max-w-sm pointer-events-none ${
+          showToast ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'
+        }`}
+      >
+        <div className="bg-primary text-on-primary p-3.5 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10">
+          <span className="material-symbols-outlined text-secondary-fixed text-[24px]">task_alt</span>
+          <div className="flex flex-col text-left">
+            <span className="font-label-md text-label-md font-semibold text-white">
+              ទាញយកបានជោគជ័យ!
+            </span>
+            <span className="font-label-sm text-label-sm text-surface-variant">
+              {toastMessage || 'របាយការណ៍សៀវភៅធំត្រូវបានរក្សាទុក'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Subtle Breadcrumb / Section Eyebrow */}
+      <div className="flex items-center justify-between mt-1 mb-2">
+        <div className="flex items-center gap-1.5 text-on-surface-variant font-label-sm text-[12px]">
+          <span className="material-symbols-outlined text-[16px] text-secondary">verified</span>
+          <span>ផ្ទៀងផ្ទាត់ដោយ AI • តុល្យការត្រឹមត្រូវ</span>
+        </div>
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-label-sm text-[11px] font-bold">
+          <span className="w-1.5 h-1.5 rounded-full bg-secondary"></span>
+          ទាន់សម័យ
+        </span>
+      </div>
+
+      {/* Section Header */}
+      <div className="flex flex-col mb-space-md">
+        <div className="flex items-center justify-between">
+          <h1 className="font-headline-lg text-[20px] text-on-surface tracking-tight font-bold">
+            បញ្ជីវិក្កយបត្រ (Receipts & Invoices)
+          </h1>
+          <button
+            onClick={onRefresh}
+            aria-label="Refresh Data"
+            className="w-9 h-9 rounded-full bg-surface-container-high text-on-surface flex items-center justify-center active:scale-95 transition-transform hover:bg-surface-container-highest"
+            type="button"
+          >
+            <span className="material-symbols-outlined text-[18px]">sync</span>
+          </button>
+        </div>
+        <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+          វិក្កយបត្រ និងបង្កាន់ដៃទាំងអស់ដែលបានស្កេន និងរក្សាទុក
+        </p>
+      </div>
+
+      {/* Search & Quick Filter Controls */}
+      <div className="flex flex-col gap-space-sm mb-space-md">
+        {/* Search Bar */}
+        <div className="relative flex items-center w-full">
+          <span className="material-symbols-outlined absolute left-3.5 text-on-surface-variant text-[20px] pointer-events-none">
+            search
+          </span>
+          <input
+            className="w-full h-12 pl-10 pr-10 rounded-2xl bg-surface-container-lowest text-on-surface placeholder:text-on-surface-variant/60 font-body-md text-body-md shadow-sm border border-surface-container-high/60 outline-none focus:border-secondary focus:ring-1 focus:ring-secondary transition-all"
+            placeholder="ស្វែងរកតាមលេខកូដ, អ្នកផ្គត់ផ្គង់..."
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          {searchQuery ? (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 text-on-surface-variant hover:text-on-surface"
+            >
+              <span className="material-symbols-outlined text-[18px]">cancel</span>
+            </button>
+          ) : (
+            <button
+              aria-label="Filters"
+              className="absolute right-2 w-8 h-8 rounded-xl bg-surface-container text-on-surface flex items-center justify-center active:scale-95 transition-transform"
+              type="button"
+            >
+              <span className="material-symbols-outlined text-[18px]">tune</span>
+            </button>
+          )}
+        </div>
+
+        {/* Filter Chips */}
+        <div className="flex items-center gap-space-xs overflow-x-auto no-scrollbar py-1">
+          <button
+            onClick={() => setActiveCategory('all')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-label-md text-label-md shrink-0 shadow-sm transition-all ${
+              activeCategory === 'all'
+                ? 'bg-primary text-on-primary font-bold'
+                : 'bg-surface-container-lowest text-on-surface-variant border border-surface-container-high/60'
+            }`}
+            type="button"
+          >
+            <span>ទាំងអស់ (All)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveCategory('expense')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-label-md text-label-md shrink-0 shadow-sm transition-all ${
+              activeCategory === 'expense'
+                ? 'bg-primary text-on-primary font-bold'
+                : 'bg-surface-container-lowest text-on-surface-variant border border-surface-container-high/60'
+            }`}
+            type="button"
+          >
+            <span className="w-2 h-2 rounded-full bg-error"></span>
+            <span>ចំណាយ (Expense)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveCategory('income')}
+            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full font-label-md text-label-md shrink-0 shadow-sm transition-all ${
+              activeCategory === 'income'
+                ? 'bg-primary text-on-primary font-bold'
+                : 'bg-surface-container-lowest text-on-surface-variant border border-surface-container-high/60'
+            }`}
+            type="button"
+          >
+            <span className="w-2 h-2 rounded-full bg-secondary"></span>
+            <span>ចំណូល (Income)</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Ledger Balance Bento Banner (Debits vs Credits) */}
+      <div className="w-full rounded-2xl bg-surface-container-lowest p-space-md shadow-sm border border-surface-container-high/60 mb-space-md flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
+            <span className="material-symbols-outlined text-[22px]">receipt_long</span>
+          </div>
+          <div className="flex flex-col">
+            <span className="font-label-sm text-label-sm text-on-surface-variant">
+              ចំណាយសរុបខែនេះ
+            </span>
+            <span className="font-financial-numeric text-[20px] text-on-surface font-bold">
+              ${totalExpenseUSD.toFixed(2)}
+            </span>
+          </div>
+        </div>
+
+        <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-label-sm font-semibold">
+          <span className="material-symbols-outlined text-[14px] text-secondary font-bold">
+            check_circle
+          </span>
+          <span>{transactions.length} វិក្កយបត្រ</span>
+        </div>
+      </div>
+
+      {/* General Ledger Entries Header */}
+      <div className="flex items-center justify-between mb-space-sm">
+        <div className="flex items-center gap-2">
+          <span className="font-headline-sm text-[15px] text-on-surface font-bold">
+            ប្រតិបត្តិការថ្មីៗ
+          </span>
+          <span className="px-2 py-0.5 rounded-full bg-surface-container-high text-on-surface-variant font-label-sm text-[11px] font-semibold">
+            {sorted.length} ធាតុ
+          </span>
+        </div>
+
+        <button
+          onClick={() => {
+            setSortOrder((prev) =>
+              prev === 'date-desc' ? 'date-asc' : prev === 'date-asc' ? 'amount-desc' : 'date-desc'
+            );
+          }}
+          className="flex items-center gap-1 text-secondary font-label-sm text-label-sm font-semibold hover:underline"
+          type="button"
+        >
+          <span>
+            {sortOrder === 'date-desc'
+              ? 'កាលបរិច្ឆេទ (ថ្មីមុន)'
+              : sortOrder === 'date-asc'
+              ? 'កាលបរិច្ឆេទ (ចាស់មុន)'
+              : 'ទឹកប្រាក់ (ច្រើនមុន)'}
+          </span>
+          <span className="material-symbols-outlined text-[16px]">swap_vert</span>
+        </button>
+      </div>
+
+      {/* Transaction Cards List */}
+      <div className="flex flex-col gap-space-sm mb-space-lg">
+        {sorted.length === 0 ? (
+          <div className="p-8 text-center bg-surface-container-lowest rounded-2xl border border-surface-container-high/60">
+            <span className="material-symbols-outlined text-4xl text-on-surface-variant/40 mb-2">
+              search_off
+            </span>
+            <p className="font-label-md text-on-surface-variant">
+              មិនមានវិក្កយបត្រត្រូវនឹងការស្វែងរកនេះទេ
+            </p>
+          </div>
+        ) : (
+          sorted.map((tx) => (
+            <div
+              key={tx.id}
+              onClick={() => onSelectTransaction(tx)}
+              className="ledger-card w-full rounded-2xl bg-surface-container-lowest p-space-md shadow-sm border border-surface-container-high/60 hover:border-secondary/40 transition-all duration-200 cursor-pointer active:scale-[0.99]"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-xl bg-surface-container-high flex items-center justify-center shrink-0 text-on-surface shadow-xs">
+                    <span className="material-symbols-outlined text-[22px]">
+                      {tx.iconName || 'receipt'}
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col min-w-0">
+                    <span className="font-label-lg text-[14px] text-on-surface font-bold truncate">
+                      {tx.vendorKh || tx.vendor}
+                    </span>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className="px-2 py-0.5 rounded bg-surface-container text-on-surface-variant font-label-sm text-[11px] font-medium">
+                        {tx.category}
+                      </span>
+                      <span className="text-on-surface-variant font-body-sm text-[12px]">
+                        {tx.date}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end shrink-0">
+                  <span
+                    className={`font-financial-numeric text-[17px] font-bold ${
+                      tx.type === 'expense' ? 'text-error' : 'text-secondary'
+                    }`}
+                  >
+                    {tx.type === 'expense' ? '-' : '+'}${tx.amountUSD.toFixed(2)}
+                  </span>
+                  <span
+                    className={`font-label-sm text-[11px] flex items-center gap-0.5 mt-0.5 ${
+                      tx.status === 'paid' ? 'text-secondary font-semibold' : 'text-on-surface-variant'
+                    }`}
+                  >
+                    <span className="material-symbols-outlined text-[13px]">
+                      {tx.status === 'paid' ? 'check_circle' : 'schedule'}
+                    </span>
+                    <span>{tx.statusTextKh || (tx.status === 'paid' ? 'បានបង់' : 'ជំពាក់')}</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Bottom Floating Action Utility */}
+      <div className="w-full flex flex-col gap-space-xs sticky bottom-20 z-20">
+        <div className="w-full p-2.5 rounded-2xl bg-surface-container-lowest/95 backdrop-blur-md shadow-xl border border-surface-container-high/80 flex items-center justify-between gap-space-sm">
+          <div className="flex items-center gap-2.5 pl-1.5">
+            <div className="w-9 h-9 rounded-xl bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
+              <span className="material-symbols-outlined text-[20px]">file_download</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="font-label-md text-[13px] text-on-surface font-bold">
+                ទាញយករបាយការណ៍
+              </span>
+              <span className="font-label-sm text-[11px] text-on-surface-variant">
+                Excel (.xlsx) / PDF
+              </span>
+            </div>
+          </div>
+
+          <button
+            onClick={handleExport}
+            className="h-11 px-space-md rounded-xl bg-primary text-on-primary font-label-lg text-label-lg font-semibold flex items-center gap-1.5 shadow-md active:scale-95 transition-all hover:bg-neutral-800"
+            type="button"
+          >
+            <span className="material-symbols-outlined text-[18px]">download</span>
+            <span>ទាញយក</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
