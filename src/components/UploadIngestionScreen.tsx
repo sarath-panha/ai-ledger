@@ -84,12 +84,13 @@ export const UploadIngestionScreen: React.FC<UploadIngestionScreenProps> = ({
   // Preset Selection
   const handleSelectPreset = (preset: typeof PRESET_RECEIPTS[0]) => {
     setReceiptImage(preset.imageUrl);
-    analyzeWithAI(preset.imageUrl.startsWith('data:') ? preset.imageUrl : undefined, 'image/jpeg', preset.hint);
+    analyzeWithAI(preset.imageUrl, 'image/jpeg', preset.hint);
   };
 
   // AI Receipt Analysis call
   const analyzeWithAI = async (imageBase64?: string, mimeType?: string, vendorHint?: string) => {
     setIsAnalyzing(true);
+    setAnalysisNotice('');
     setAnalysisProgress(30);
 
     const progressTimer = setInterval(() => {

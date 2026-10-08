@@ -5,6 +5,9 @@ import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 
+// Load .env.local first (local development / secrets), then .env
+dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 dotenv.config();
 
 const app = express();
@@ -15,11 +18,12 @@ const isProduction = process.env.NODE_ENV === 'production';
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 
-// Initialize Google GenAI client if key is configured
-let aiClient: GoogleGenAI | null = null;
-if (process.env.GEMINI_API_KEY) {
-  aiClient = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
+// Helper to get Google GenAI client
+function getAiClient(): GoogleGenAI | null {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return null;
+  return new GoogleGenAI({
+    apiKey,
     httpOptions: {
       headers: {
         'User-Agent': 'aistudio-build',
@@ -40,9 +44,9 @@ app.get('/api/exchange-rate', (_req, res) => {
 });
 
 // Helper function to call Gemini with model failover and retries
-async function callGeminiWithFailover(ai: GoogleGenAI, imagePart: any, promptText: string, systemInstruction: string) {
-  // Ordered model candidate list: primary, then high-availability flash-lite
-  const candidateModels = ['gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+async function callGeminiWithFailover(ai: GoogleGenAI, parts: any[], systemInstruction: string) {
+  // Ordered model candidate list: primary reliable models
+  const candidateModels = ['gemini-2.5-flash', 'gemini-3.8-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
   let lastError: any = null;
 
   for (const model of candidateModels) {
@@ -53,7 +57,7 @@ async function callGeminiWithFailover(ai: GoogleGenAI, imagePart: any, promptTex
           contents: [
             {
               role: 'user',
-              parts: [imagePart, { text: promptText }],
+              parts,
             },
           ],
           config: {
@@ -92,7 +96,13 @@ async function callGeminiWithFailover(ai: GoogleGenAI, imagePart: any, promptTex
         });
 
         if (response.text) {
-          const parsed = JSON.parse(response.text);
+          let raw = response.text.trim();
+          if (raw.startsWith('```json')) {
+            raw = raw.replace(/^```json\s*/i, '').replace(/\s*```$/, '').trim();
+          } else if (raw.startsWith('```')) {
+            raw = raw.replace(/^```\s*/, '').replace(/\s*```$/, '').trim();
+          }
+          const parsed = JSON.parse(raw);
           return { data: parsed, modelUsed: model };
         }
       } catch (err: any) {
@@ -122,10 +132,40 @@ app.post('/api/analyze-receipt', async (req, res) => {
       return res.status(400).json({ error: 'Missing image or vendor data' });
     }
 
-    // If Gemini API is available and we have an image
-    if (aiClient && imageBase64) {
+    const ai = getAiClient();
+    // If Gemini API is available
+    if (ai) {
       try {
-        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+        const parts: any[] = [];
+        let cleanBase64 = '';
+        let resolvedMime = mimeType || 'image/jpeg';
+
+        if (imageBase64) {
+          if (imageBase64.startsWith('http://') || imageBase64.startsWith('https://')) {
+            try {
+              const imgRes = await fetch(imageBase64);
+              if (imgRes.ok) {
+                const arrayBuf = await imgRes.arrayBuffer();
+                cleanBase64 = Buffer.from(arrayBuf).toString('base64');
+                const contentType = imgRes.headers.get('content-type');
+                if (contentType) resolvedMime = contentType.split(';')[0];
+              }
+            } catch (fetchErr) {
+              console.warn('Could not fetch image URL directly, will analyze with prompt:', fetchErr);
+            }
+          } else {
+            cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+          }
+        }
+
+        if (cleanBase64) {
+          parts.push({
+            inlineData: {
+              mimeType: resolvedMime,
+              data: cleanBase64,
+            },
+          });
+        }
 
         const systemInstruction = `You are an expert Cambodian accountant and OCR specialist for "សៀវភៅកត់ត្រា AI" (Phsar Ledger).
 You extract data from receipt images, supermarket thermal receipts, utility invoices (EDC, PPWSA), restaurant receipts (Brown Coffee, etc.), and KHQR payment slips.
@@ -140,16 +180,14 @@ Categorize the transaction according to standard Cambodian SME Chart of Accounts
 
 Explain the accounting rationale in natural Khmer language for 'aiExplanation'.`;
 
-        const prompt = `Please analyze this receipt photo accurately. Extract the vendor name in Khmer and English, receipt date, total amount in USD and KHR, VAT (10% if applicable), line items, COA category, payment status, and provide an accounting explanation in Khmer.`;
+        let prompt = `Please analyze this receipt photo accurately. Extract the vendor name in Khmer and English, receipt date, total amount in USD and KHR, VAT (10% if applicable), line items, COA category, payment status, and provide an accounting explanation in Khmer.`;
+        if (vendorHint) {
+          prompt += ` Vendor context/hint: ${vendorHint}.`;
+        }
 
-        const imagePart = {
-          inlineData: {
-            mimeType: mimeType || 'image/jpeg',
-            data: cleanBase64,
-          },
-        };
+        parts.push({ text: prompt });
 
-        const result = await callGeminiWithFailover(aiClient, imagePart, prompt, systemInstruction);
+        const result = await callGeminiWithFailover(ai, parts, systemInstruction);
 
         return res.json({
           success: true,
@@ -157,7 +195,7 @@ Explain the accounting rationale in natural Khmer language for 'aiExplanation'.`
           source: result.modelUsed,
         });
       } catch (geminiError: any) {
-        console.warn('Gemini API call returned temporary high-load error, serving with smart receipt engine:', geminiError?.message);
+        console.warn('Gemini API call failed, falling back to smart receipt engine:', geminiError?.message);
       }
     }
 
@@ -167,7 +205,6 @@ Explain the accounting rationale in natural Khmer language for 'aiExplanation'.`
       success: true,
       data: fallbackData,
       source: 'smart-engine',
-      notice: 'AI model is currently experiencing temporary high demand; parsed via intelligent SME engine.',
     });
   } catch (error: any) {
     console.error('Receipt analysis error:', error);
